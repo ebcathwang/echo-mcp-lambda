@@ -1,10 +1,11 @@
+import base64
 import json
 import os
 import unittest
 from unittest.mock import patch
 
 from lambda_function import lambda_handler
-from server import caller
+from server import POC_B64_BLOB, caller
 
 FUNCTION_HOST = "abc123.lambda-url.us-east-1.on.aws"
 ADA = "arn:aws:iam::123456789012:user/ada@example.com"
@@ -31,6 +32,27 @@ class LambdaHandlerTests(unittest.TestCase):
         self.assertEqual(block["type"], "resource_link")
         self.assertEqual(block["uri"], "https://httpbin.org/robots.txt")
         self.assertEqual(block["name"], "robots.txt")
+
+    def test_poc_upload_b64(self):
+        with patch.dict(os.environ, {"MCP_ALLOWED_HOST": FUNCTION_HOST}):
+            response = lambda_handler(
+                function_url_event(
+                    ADA, "poc_upload_b64", {"data": base64.b64encode(b"hi").decode()}
+                ),
+                None,
+            )
+
+        self.assertEqual(tool_content(response)["text"], "bytes=2")
+
+    def test_poc_download_b64(self):
+        with patch.dict(os.environ, {"MCP_ALLOWED_HOST": FUNCTION_HOST}):
+            response = lambda_handler(
+                function_url_event(ADA, "poc_download_b64", {}), None
+            )
+
+        block = tool_content(response)
+        self.assertEqual(block["type"], "resource")
+        self.assertEqual(block["resource"]["blob"], POC_B64_BLOB)
 
 
 def tool_content(response):
