@@ -1,4 +1,6 @@
 import base64
+import hashlib
+import io
 import json
 import os
 import unittest
@@ -53,6 +55,47 @@ class LambdaHandlerTests(unittest.TestCase):
         block = tool_content(response)
         self.assertEqual(block["type"], "resource")
         self.assertEqual(block["resource"]["blob"], POC_B64_BLOB)
+
+    def test_poc_codex_file_fetches_download_url(self):
+        payload = b"codex-file"
+
+        class FakeResp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        with patch.dict(os.environ, {"MCP_ALLOWED_HOST": FUNCTION_HOST}):
+            with patch("server.urllib.request.urlopen", return_value=FakeResp(payload)):
+                response = lambda_handler(
+                    function_url_event(
+                        ADA,
+                        "poc_codex_file",
+                        {
+                            "file": {
+                                "download_url": "https://example.com/f",
+                                "file_id": "file_1",
+                                "file_name": "f.txt",
+                            }
+                        },
+                    ),
+                    None,
+                )
+
+        self.assertEqual(
+            tool_content(response)["text"],
+            f"bytes={len(payload)} sha256={hashlib.sha256(payload).hexdigest()} file_name=f.txt",
+        )
+
+    def test_poc_codex_file_rejects_path_string(self):
+        with patch.dict(os.environ, {"MCP_ALLOWED_HOST": FUNCTION_HOST}):
+            response = lambda_handler(
+                function_url_event(ADA, "poc_codex_file", {"file": "/tmp/x"}),
+                None,
+            )
+
+        self.assertIn("path string", tool_content(response)["text"])
 
 
 def tool_content(response):

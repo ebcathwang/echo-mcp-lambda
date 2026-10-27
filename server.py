@@ -48,3 +48,19 @@ def poc_download_b64() -> EmbeddedResource:
             blob=POC_B64_BLOB,
         )
     )
+
+
+@mcp.tool(meta={"openai/fileParams": ["file"]})
+def poc_codex_file(file: dict | str) -> str:
+    """Accept a Codex provided-file object and fetch download_url."""
+    if isinstance(file, str):
+        return "error: expected file object with download_url, got path string"
+    url = file.get("download_url")
+    if not isinstance(url, str) or not url.startswith("https://"):
+        return "error: missing https download_url"
+    with urllib.request.urlopen(urllib.request.Request(url), timeout=10) as resp:
+        data = resp.read(POC_CODEX_MAX_BYTES + 1)
+    if len(data) > POC_CODEX_MAX_BYTES:
+        return "error: file too large"
+    name = file.get("file_name") or ""
+    return f"bytes={len(data)} sha256={hashlib.sha256(data).hexdigest()} file_name={name}"
