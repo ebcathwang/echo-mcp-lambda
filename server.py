@@ -1,19 +1,42 @@
 import base64
 import hashlib
+import os
 import urllib.request
 from contextvars import ContextVar
 
 from mcp.server import MCPServer
-from mcp.types import BlobResourceContents, EmbeddedResource, ResourceLink
+from mcp.types import BlobResourceContents, EmbeddedResource, ResourceLink, TextResourceContents
 
 mcp = MCPServer("echo-mcp-lambda", version="0.1.0")
 
 caller: ContextVar[str] = ContextVar("iam_caller", default="unknown")
 
-POC_DOWNLOAD_URI = "https://httpbin.org/robots.txt"
-POC_B64_BLOB = base64.b64encode(b"poc b64\n").decode()
-POC_B64_URI = f"https://httpbin.org/base64/{POC_B64_BLOB}"
+POC_S3_BUCKET = os.environ.get("POC_S3_BUCKET", "cath-temp")
+POC_S3_KEY = os.environ.get("POC_S3_KEY", "poc/sample.pdf")
+POC_PRESIGN_SECONDS = 3600
 POC_CODEX_MAX_BYTES = 1_000_000
+POC_LARGE_KEYS = {
+    "500mb": ("poc/large-500mb.bin", 524288000),
+    "1gb": ("poc/large-1gb.bin", 1073741824),
+}
+
+
+def poc_s3():
+    import boto3
+
+    return boto3.client("s3")
+
+
+def poc_presigned_url(key: str = POC_S3_KEY) -> str:
+    return poc_s3().generate_presigned_url(
+        "get_object",
+        Params={"Bucket": POC_S3_BUCKET, "Key": key},
+        ExpiresIn=POC_PRESIGN_SECONDS,
+    )
+
+
+def poc_object_bytes() -> bytes:
+    return poc_s3().get_object(Bucket=POC_S3_BUCKET, Key=POC_S3_KEY)["Body"].read()
 
 
 @mcp.tool()
@@ -24,11 +47,26 @@ def echo(text: str) -> str:
 
 @mcp.tool()
 def poc_download_resource_link() -> ResourceLink:
-    """Return a resource_link to a publicly downloadable file."""
+    """Return a resource_link with a 1-hour S3 pre-signed URL for the PoC PDF."""
     return ResourceLink(
-        uri=POC_DOWNLOAD_URI,
-        name="robots.txt",
-        mimeType="text/plain",
+        uri=poc_presigned_url(),
+        name="sample.pdf",
+        mimeType="application/pdf",
+    )
+
+
+@mcp.tool()
+def poc_download_large(size: str) -> ResourceLink:
+    """Return a pre-signed link to a large PoC file. size: 500mb or 1gb."""
+    item = POC_LARGE_KEYS.get(size)
+    if item is None:
+        raise ValueError("size must be 500mb or 1gb")
+    key, nbytes = item
+    return ResourceLink(
+        uri=poc_presigned_url(key),
+        name=key.rsplit("/", 1)[-1],
+        mimeType="application/octet-stream",
+        size=nbytes,
     )
 
 
@@ -40,14 +78,40 @@ def poc_upload_b64(data: str) -> str:
 
 @mcp.tool()
 def poc_download_b64() -> EmbeddedResource:
-    """Return a small file as an embedded base64 blob."""
+    """Return the PoC PDF as an embedded base64 blob."""
+    raw = poc_object_bytes()
     return EmbeddedResource(
         resource=BlobResourceContents(
-            uri=POC_B64_URI,
-            mimeType="text/plain",
-            blob=POC_B64_BLOB,
+            uri=poc_presigned_url(POC_S3_KEY),
+            mimeType="application/pdf",
+            blob=base64.b64encode(raw).decode(),
         )
     )
+
+
+@mcp.tool()
+def poc_download_many_md() -> list[EmbeddedResource]:
+    """Return 10 small markdown files in one tool result."""
+    s3 = poc_s3()
+    out: list[EmbeddedResource] = []
+    for i in range(10):
+        key = f"poc/md/note-{i:02d}.md"
+        body = s3.get_object(Bucket=POC_S3_BUCKET, Key=key)["Body"].read().decode()
+        url = s3.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": POC_S3_BUCKET, "Key": key},
+            ExpiresIn=POC_PRESIGN_SECONDS,
+        )
+        out.append(
+            EmbeddedResource(
+                resource=TextResourceContents(
+                    uri=url,
+                    mimeType="text/markdown",
+                    text=body,
+                )
+            )
+        )
+    return out
 
 
 @mcp.tool(meta={"openai/fileParams": ["file"]})
