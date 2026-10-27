@@ -10,6 +10,7 @@ def lambda_handler(event, context):
     token = caller.set(iam_caller_label(event))
     try:
         app = mcp.streamable_http_app(
+            streamable_http_path="/",
             json_response=True,
             stateless_http=True,
             transport_security=TransportSecuritySettings(allowed_hosts=allowed_hosts()),

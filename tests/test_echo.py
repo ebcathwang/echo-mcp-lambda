@@ -14,31 +14,42 @@ GRACE = "arn:aws:iam::123456789012:user/grace@example.com"
 class LambdaHandlerTests(unittest.TestCase):
     def test_function_url_echo_twice(self):
         with patch.dict(os.environ, {"MCP_ALLOWED_HOST": FUNCTION_HOST}):
-            first = lambda_handler(function_url_event(ADA), None)
-            second = lambda_handler(function_url_event(GRACE), None)
+            first = lambda_handler(function_url_event(ADA, "echo", {"text": "hi"}), None)
+            second = lambda_handler(function_url_event(GRACE, "echo", {"text": "hi"}), None)
 
         self.assertEqual(caller.get(), "unknown")
-        self.assertEqual(echo_text(first), f"hi\nfrom ada@example.com ({ADA})")
-        self.assertEqual(echo_text(second), f"hi\nfrom grace@example.com ({GRACE})")
+        self.assertEqual(tool_content(first)["text"], f"hi\nfrom ada@example.com ({ADA})")
+        self.assertEqual(tool_content(second)["text"], f"hi\nfrom grace@example.com ({GRACE})")
+
+    def test_poc_download_resource_link(self):
+        with patch.dict(os.environ, {"MCP_ALLOWED_HOST": FUNCTION_HOST}):
+            response = lambda_handler(
+                function_url_event(ADA, "poc_download_resource_link", {}), None
+            )
+
+        block = tool_content(response)
+        self.assertEqual(block["type"], "resource_link")
+        self.assertEqual(block["uri"], "https://httpbin.org/robots.txt")
+        self.assertEqual(block["name"], "robots.txt")
 
 
-def echo_text(response):
+def tool_content(response):
     if response["statusCode"] != 200:
         raise AssertionError(response)
     body = json.loads(response["body"])
-    if body["result"]["isError"]:
+    if body["result"].get("isError"):
         raise AssertionError(body)
-    return body["result"]["content"][0]["text"]
+    return body["result"]["content"][0]
 
 
-def function_url_event(user_arn):
+def function_url_event(user_arn, tool_name, arguments):
     message = {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
         "params": {
-            "name": "echo",
-            "arguments": {"text": "hi"},
+            "name": tool_name,
+            "arguments": arguments,
             "_meta": {
                 "io.modelcontextprotocol/protocolVersion": "2026-07-28",
                 "io.modelcontextprotocol/clientInfo": {"name": "test", "version": "0"},
@@ -54,10 +65,10 @@ def function_url_event(user_arn):
             "accept": "application/json, text/event-stream",
             "mcp-protocol-version": "2026-07-28",
             "mcp-method": "tools/call",
-            "mcp-name": "echo",
+            "mcp-name": tool_name,
         },
         "requestContext": {
-            "http": {"method": "POST", "path": "/mcp", "sourceIp": "127.0.0.1"},
+            "http": {"method": "POST", "path": "/", "sourceIp": "127.0.0.1"},
             "authorizer": {"iam": {"userArn": user_arn}},
         },
         "body": json.dumps(message),
